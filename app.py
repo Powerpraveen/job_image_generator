@@ -7,7 +7,13 @@ import re, textwrap, random
 from datetime import datetime
 from urllib.parse import urljoin
 
-# ---------- Helpers for pixel-perfect text ----------
+# -------------------- Utilities for pixel-accurate text --------------------
+def load_font(path, size):
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
+
 def wrap_text_px(text, font, max_width_px):
     words = (text or "").split()
     if not words:
@@ -25,19 +31,13 @@ def wrap_text_px(text, font, max_width_px):
     return lines
 
 def text_block_height(lines, font, line_spacing_px):
-    h = 0
+    total = 0
     for line in lines:
         bbox = font.getbbox(line or " ")
-        h += (bbox[3] - bbox[1]) + line_spacing_px
-    return h
+        total += (bbox[3] - bbox[1]) + line_spacing_px
+    return total
 
-def load_font(path, size):
-    try:
-        return ImageFont.truetype(path, size)
-    except:
-        return ImageFont.load_default()
-
-# ---------- Scraper with intelligent matching ----------
+# -------------------- Scraper with robust matching --------------------
 def get_job_details(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -48,7 +48,7 @@ def get_job_details(url):
 
         # Favicon
         favicon_url = None
-        icon_link = soup.find("link", rel=re.compile("icon", re.I))
+        icon_link = soup.find("link", rel=re.compile(r"icon", re.I))
         if icon_link and icon_link.get("href"):
             favicon_url = urljoin(url, icon_link["href"])
 
@@ -56,7 +56,7 @@ def get_job_details(url):
         title_el = soup.find("h1")
         title = title_el.get_text(strip=True) if title_el else "Title Not Found"
 
-        # Post name: table first, then bold/strong, then regex fallback
+        # Post Names: table -> strong/bold -> regex fallback
         post_name = "Check Notification"
         for row in soup.find_all("tr"):
             tds = row.find_all("td")
@@ -66,17 +66,17 @@ def get_job_details(url):
         if post_name == "Check Notification":
             for tag in soup.find_all(["strong", "b"]):
                 t = tag.get_text(" ", strip=True).lower()
-                if "post name" in t or "post" in t:
-                    sib = tag.find_next_sibling(text=True)
-                    if sib and len(sib.strip()) > 2:
-                        post_name = sib.strip()
+                if "post name" in t or re.search(r"\bpost\b", t):
+                    sibling_text = (tag.find_next_sibling(text=True) or "").strip()
+                    if len(sibling_text) > 2:
+                        post_name = sibling_text
                         break
         if post_name == "Check Notification":
             m = re.search(r"(?:post\s*name|name\s*of\s*post)\s*[:\-]\s*(.+)", page_text, re.I)
             if m:
                 post_name = m.group(1).split("\n")[0].strip()
 
-        # Age limit: prefer ranges to show max
+        # Age limit (prefer max)
         age_limit = "Not Found"
         m = re.search(r'(\d{1,2})\s*(?:to|-|–)\s*(\d{1,2})\s*years', page_text, re.I)
         if m:
@@ -86,11 +86,16 @@ def get_job_details(url):
             if m:
                 age_limit = f"Up to {m.group(1)} Years"
 
-        # Salary: pick highest numeric in the page (ignore small numbers)
+        # Salary: pick highest large numeric; raw strings and no illegal escapes
         salary = "Not Found"
+        salary_matches = re.findall(
+            r'(?:₹|Rs\.?|rs\.?)?\s*([\d,]{4,})\s*(?:/-)?',
+            page_text,
+            flags=re.IGNORECASE
+        )
         nums = []
-        for s in re.findall(r'(?:₹|\Rs\.?)?\s*([\d,]{4,})(?:\s*/-)?', page_text, re.I):
-            clean = s.replace(",", "")
+        for s in salary_matches:
+            clean = s.replace(',', '')
             if clean.isdigit():
                 v = int(clean)
                 if v >= 3000:
@@ -98,7 +103,7 @@ def get_job_details(url):
         if nums:
             salary = f"Up to ₹{max(nums):,}/-"
 
-        # Selection process: header + following list/para
+        # Selection process
         selection = "As per rules"
         sel_header = soup.find(['strong', 'h3', 'h4'], string=re.compile(r"Selection Process", re.I))
         if sel_header:
@@ -113,11 +118,10 @@ def get_job_details(url):
                     if len(txt) > 3:
                         selection = txt
 
-        # Last date: handle 22 August 2025, 22 Aug 2025, 22-08-2025, 2/8/25 etc.
+        # Last Date: handle “22 August 2025”, “22 Aug 2025”, “22-08-2025”, “2/8/25”
         last_date = "Not Found"
         parsed = []
 
-        # Full scan for many formats
         # 1) D Month YYYY
         for d, mon, y in re.findall(r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})', page_text):
             try:
@@ -125,7 +129,7 @@ def get_job_details(url):
                 yr = int(y) if len(y) == 4 else int(f"20{y}")
                 if yr >= 2021:
                     parsed.append(datetime(yr, mon_num, int(d)))
-            except:
+            except Exception:
                 pass
 
         # 2) D/M/Y or D-M-Y or D.M.Y
@@ -134,10 +138,10 @@ def get_job_details(url):
                 yr = int(y) if len(y) == 4 else int(f"20{y}")
                 if yr >= 2021:
                     parsed.append(datetime(yr, int(mth), int(d)))
-            except:
+            except Exception:
                 pass
 
-        # Prefer lines mentioning Last/Closing date
+        # 3) Prefer lines with last/closing date keywords
         lines = page_text.split("\n")
         key = re.compile(r'(Last\s*Date|Closing\s*Date|Apply\s*Before)', re.I)
         for i, line in enumerate(lines):
@@ -149,14 +153,14 @@ def get_job_details(url):
                         yr = int(y) if len(y) == 4 else int(f"20{y}")
                         if yr >= 2021:
                             parsed.append(datetime(yr, mon_num, int(d)))
-                    except:
+                    except Exception:
                         pass
                 for d, mth, y in re.findall(r'(\d{1,2})[./\-]\s*(\d{1,2})[./\-]\s*(\d{2,4})', window):
                     try:
                         yr = int(y) if len(y) == 4 else int(f"20{y}")
                         if yr >= 2021:
                             parsed.append(datetime(yr, int(mth), int(d)))
-                    except:
+                    except Exception:
                         pass
 
         if parsed:
@@ -176,7 +180,7 @@ def get_job_details(url):
         st.error(f"Scraping error: {e}")
         return None
 
-# ---------- Poster renderer with no-overlap engine ----------
+# -------------------- Poster renderer (no-overlap engine) --------------------
 def create_job_post_image(details):
     if not details:
         return None
@@ -256,11 +260,10 @@ def create_job_post_image(details):
 
         return header_h + 18 + t_h + 16 + d_h + reserved_bottom
 
-    # Auto-shrink fonts if content too tall
+    # Auto-shrink fonts if content too tall (prevents overlap)
     for _ in range(12):
         if total_height() <= H - 4:
             break
-        # reduce header then fonts
         if header_h > 136:
             header_h = int(header_h * 0.95)
         title_px = max(48, int(title_px * 0.94))
@@ -295,7 +298,7 @@ def create_job_post_image(details):
             fav = fav.resize((int(fav.width * scale), target_h), Image.LANCZOS)
             fav_y = (header_h - fav.height) // 2
             img.paste(fav, (40, fav_y), fav)
-        except:
+        except Exception:
             pass
 
     y = header_h + 18
@@ -324,7 +327,7 @@ def create_job_post_image(details):
             y += (vb[3] - vb[1]) + gap_body
         y += gap_block
 
-    # Last date box (fixed above footer)
+    # Last Date box (fixed above footer)
     box_y = H - reserved_bottom + 30
     draw.rounded_rectangle([margin-18, box_y, W-margin+18, box_y + date_box_h], radius=20, fill=ACC)
     draw.text((W//2, box_y + 56), "Last Date to Apply", font=ft_label, fill=BG, anchor="mm")
@@ -335,17 +338,17 @@ def create_job_post_image(details):
 
     return img
 
-# ---------- Streamlit UI ----------
-st.set_page_config(page_title="AI Job Post Image Generator", page_icon="🧰", layout="centered")  # page_icon supports emoji; also supports image objects[2][9]
+# -------------------- Streamlit UI --------------------
+st.set_page_config(page_title="AI Job Post Image Generator", page_icon="🧰", layout="centered")
 st.title("🚀 AI Job Post Image Generator")
 
-st.markdown("Paste a job post URL. The app extracts Title, Post Name, Max Age Limit, Highest Salary, Selection Process, and the latest Last Date, then builds a poster in multiple sizes with branding and emojis.")
+st.markdown("Paste a job post URL. The app extracts Title, Post Name, Max Age Limit, Highest Salary, Selection Process, and the latest Last Date, then builds a poster with branding, emojis, and multiple download sizes.")
 
 url = st.text_input("Job post URL")
 sizes = {
-    "9:16 Story (1080x1920)": (1080, 1920),   # Instagram/Facebook Story[11][14][8]
-    "Instagram Square (1080x1080)": (1080, 1080),  # Instagram feed square[11][14][8]
-    "Facebook Link (1200x630)": (1200, 630),  # Facebook link image[11][14][8]
+    "9:16 Story (1080x1920)": (1080, 1920),
+    "Instagram Square (1080x1080)": (1080, 1080),
+    "Facebook Link (1200x630)": (1200, 630),
 }
 
 if st.button("Generate"):
