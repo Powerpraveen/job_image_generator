@@ -1,178 +1,211 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image, ImageDraw, ImageFont
-import textwrap
 from io import BytesIO
-import re
+from PIL import Image, ImageDraw, ImageFont
+import textwrap, re, random
 from datetime import datetime
-import random
 from urllib.parse import urljoin
 
-# This data scraping function is stable and requires no changes.
+# --- Scraper ---
 def get_job_details(url):
-    """
-    Fetches job details and the website's favicon URL.
-    """
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        page_text = soup.get_text(separator="\n", strip=True)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        html = requests.get(url, headers=headers, timeout=10)
+        html.raise_for_status()
+        soup = BeautifulSoup(html.text, 'html.parser')
+        text = soup.get_text(separator="\n", strip=True)
 
+        # Favicon
         favicon_url = None
         icon_link = soup.find("link", rel=re.compile("icon", re.I))
-        if icon_link and icon_link.get('href'):
-            favicon_url = urljoin(url, icon_link['href'])
+        if icon_link and icon_link.get("href"):
+            favicon_url = urljoin(url, icon_link["href"])
 
-        title = soup.find('h1', class_='entry-title').text.strip() if soup.find('h1', class_='entry-title') else "Title Not Found"
-        
-        post_names_text = "Check Notification"
-        for row in soup.find_all('tr'):
-            cells = row.find_all('td')
-            if len(cells) > 1 and 'post name' in cells[0].get_text(strip=True).lower():
-                post_names_text = cells[1].get_text(strip=True); break
-        
-        age_limit_str = "Not Found"
-        age_range_match = re.search(r'(\d{1,2})\s*(?:to|-)\s*(\d{1,2})\s*years', page_text, re.IGNORECASE)
-        if age_range_match: age_limit_str = f"Up to {age_range_match.group(2)} Years"
+        # Title
+        title = soup.find("h1", class_="entry-title")
+        title_text = title.text.strip() if title else "Title Not Found"
+
+        # Post Names
+        post_names = "Check Notification"
+        for row in soup.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) > 1 and "post name" in cells[0].get_text(strip=True).lower():
+                post_names = cells[1].get_text(strip=True)
+                break
+
+        # Age Limit - show max
+        age_limit = "Not Found"
+        m = re.search(r'(\d{1,2})\s*(?:to|-)\s*(\d{1,2})\s*years', text, re.I)
+        if m:
+            age_limit = f"Up to {m.group(2)} Years"
         else:
-            max_age_match = re.search(r'max(?:imum)?\s*age\s*(?:limit)?\s*[:\s]*(\d{1,2})', page_text, re.IGNORECASE)
-            if max_age_match: age_limit_str = f"Up to {max_age_match.group(1)} Years"
+            m = re.search(r'max(?:imum)?\s*age\s*(?:limit)?\s*[:\s]*(\d{1,2})', text, re.I)
+            if m:
+                age_limit = f"Up to {m.group(1)} Years"
 
-        salary_str = "Not Found"
-        salaries = re.findall(r'₹?\s*([\d,]{4,})', page_text)
-        if salaries:
-            numeric_salaries = [int(s.replace(',', '')) for s in salaries if s.replace(',', '').isdigit()]
-            if numeric_salaries: salary_str = f"Up to ₹{max(numeric_salaries):,}/-"
-        
-        last_date_str = "Not Found"
-        date_matches = re.findall(r'(\d{1,2})[./-]\s?(\d{1,2}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[./-]\s?(\d{2,4})', page_text, re.I)
+        # Salary - pick highest
+        salary = "Not Found"
+        salaries = re.findall(r'₹?\s*([\d,]{4,})', text)
+        nums = [int(s.replace(',', '')) for s in salaries if s.replace(',', '').isdigit()]
+        if nums:
+            salary = f"Up to ₹{max(nums):,}/-"
+
+        # Last Date - flexible parsing, pick latest
+        last_date = "Not Found"
+        date_matches = re.findall(r'(\d{1,2})[./ -]\s?(\d{1,2}|[A-Za-z]{3,9})[a-z]*[./ -]\s?(\d{2,4})', text)
         parsed_dates = []
-        for d, m, y in date_matches:
+        for d, mth, y in date_matches:
             try:
-                month_num = datetime.strptime(m, "%b" if len(m)==3 else "%B").month if m.isalpha() else int(m)
+                if mth.isalpha():
+                    mth_num = datetime.strptime(mth[:3], "%b").month
+                else:
+                    mth_num = int(mth)
                 year_num = int(f"20{y}") if len(y) == 2 else int(y)
-                if year_num > 2020: parsed_dates.append(datetime(year_num, month_num, int(d)))
-            except ValueError:
-                continue
-        if parsed_dates: last_date_str = max(parsed_dates).strftime('%d %B %Y')
+                if year_num > 2020:
+                    parsed_dates.append(datetime(year_num, mth_num, int(d)))
+            except:
+                pass
+        if parsed_dates:
+            last_date = max(parsed_dates).strftime('%d %B %Y')
 
-        selection_process_text = "As per rules"
-        selection_header = soup.find(['strong', 'h3'], string=re.compile("Selection Process", re.I))
-        if selection_header:
-            next_element = selection_header.find_next(['ul', 'p'])
-            if next_element: selection_process_text = ', '.join([li.get_text(strip=True) for li in next_element.find_all('li')]) if next_element.name == 'ul' else next_element.get_text(strip=True)
+        # Selection Process
+        selection = "As per rules"
+        sel_header = soup.find(['strong', 'h3'], string=re.compile("Selection Process", re.I))
+        if sel_header:
+            nxt = sel_header.find_next(['ul', 'p'])
+            if nxt:
+                selection = ', '.join([li.get_text(strip=True) for li in nxt.find_all('li')]) if nxt.name == "ul" else nxt.get_text(strip=True)
 
         return {
-            "Job Post Title": title, "Post Names": post_names_text, "Age Limit": age_limit_str,
-            "Salary": salary_str, "Selection Process": selection_process_text, "Last Date": last_date_str,
+            "Job Post Title": title_text,
+            "Post Names": post_names,
+            "Age Limit": age_limit,
+            "Salary": salary,
+            "Selection Process": selection,
+            "Last Date": last_date,
             "Favicon URL": favicon_url
         }
     except Exception as e:
-        st.error(f"An error occurred: {e}"); return None
+        st.error(f"Scraping error: {e}")
+        return None
 
-# --- NEW: Final, Perfected Image Generation Engine ---
+# --- Text Wrap Helper ---
+def wrap_text_px(text, font, max_width):
+    words = (text or "").split()
+    lines, cur = [], ""
+    for w in words:
+        trial = (cur + " " + w).strip()
+        if font.getlength(trial) <= max_width or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = w
+    if cur: lines.append(cur)
+    return lines
+
+def text_height(lines, font, spacing):
+    return sum((font.getbbox(line or " ")[3] - font.getbbox(line or " ")[1]) + spacing for line in lines)
+
+# --- Renderer ---
 def create_job_post_image(details):
     if not details: return None
 
+    # Colors
     palettes = [
         {"bg": (10, 25, 47), "text": (229, 231, 235), "accent": (5, 150, 105)},
         {"bg": (249, 250, 251), "text": (17, 24, 39), "accent": (37, 99, 235)},
-        {"bg": (75, 85, 99), "text": (255, 255, 255), "accent": (253, 186, 116)},
+        {"bg": (33, 37, 41), "text": (248, 249, 250), "accent": (255, 193, 7)},
     ]
-    palette = random.choice(palettes)
-    BG_COLOR, TEXT_COLOR, ACCENT_COLOR = palette["bg"], palette["text"], palette["accent"]
-    
-    keywords = ["JOB", "APPLY", "LINK", "DETAILS"]
-    cta_templates = ["Comment '{keyword}' for the link!", "Want the link? Type '{keyword}'!"]
-    
+    BG_COLOR, TEXT_COLOR, ACCENT_COLOR = random.choice(palettes).values()
+
+    # Canvas
     width, height = 1080, 1920
-    img = Image.new('RGB', (width, height), color=BG_COLOR)
-    draw = ImageDraw.Draw(img)
+    margin, safe_width = 120, width - 240
+    reserved_bottom = 90 + 30 + 180 + 30  # footer + padding + datebox + padding
 
-    try:
-        font_bold = ImageFont.truetype("Poppins-Bold.ttf", 65); font_regular = ImageFont.truetype("Poppins-Regular.ttf", 45); font_small = ImageFont.truetype("Poppins-Regular.ttf", 42); header_font = ImageFont.truetype("Poppins-Bold.ttf", 50)
-    except IOError:
-        st.error("Font files are missing!"); return None
+    # Fonts
+    def load_font(name, size):
+        try: return ImageFont.truetype(name, size)
+        except: return ImageFont.load_default()
 
-    # --- Header with Correctly Sized Favicon ---
-    header_height = 180
-    draw.rectangle([0, 0, width, header_height], fill=ACCENT_COLOR)
-    draw.text((width/2, header_height/2), "Latest Job Update", font=header_font, fill=BG_COLOR, anchor="mm")
-    
+    title_size, label_size, body_size, header_size = 64, 44, 46, 50
+    font_title = load_font("Poppins-Bold.ttf", title_size)
+    font_label = load_font("Poppins-Bold.ttf", label_size)
+    font_body = load_font("Poppins-Regular.ttf", body_size)
+    font_header = load_font("Poppins-Bold.ttf", header_size)
+    font_footer = load_font("Poppins-Regular.ttf", 40)
+
+    # Header & favicon
+    img = Image.new("RGB", (width, height), BG_COLOR)
+    d = ImageDraw.Draw(img)
+    header_h = 170
+    d.rectangle([0, 0, width, header_h], fill=ACCENT_COLOR)
+    d.text((width//2, header_h//2), "Latest Job Update", font=font_header, fill=BG_COLOR, anchor="mm")
+
     if details["Favicon URL"]:
         try:
-            icon_response = requests.get(details["Favicon URL"], stream=True, timeout=5)
-            icon_response.raise_for_status()
-            favicon = Image.open(icon_response.raw).convert("RGBA")
-            # --- FIX: Set favicon size to be visually similar to header text ---
-            favicon_size = 70 
-            favicon.thumbnail((favicon_size, favicon_size))
-            # --- FIX: Center favicon vertically in the header bar ---
-            favicon_y = (header_height - favicon.height) // 2
-            img.paste(favicon, (60, favicon_y), favicon)
-        except Exception:
-            pass
+            r = requests.get(details["Favicon URL"], timeout=5, stream=True)
+            r.raise_for_status()
+            fav = Image.open(r.raw).convert("RGBA")
+            target_h = font_header.getbbox("Ag")[3] + 8
+            scale = target_h / fav.height
+            fav = fav.resize((int(fav.width * scale), target_h), Image.LANCZOS)
+            fav_y = (header_h - fav.height) // 2
+            img.paste(fav, (40, fav_y), fav)
+        except: pass
 
-    # --- Main Content with GUARANTEED No-Trim Layout ---
-    y_position = 240
-    # --- FIX: Increased margin and reduced wrap width to prevent ANY trimming ---
-    margin = 120 
-    wrap_width_title = 24
-    wrap_width_details = 35
-
-    # Title
-    title_lines = textwrap.wrap(details["Job Post Title"], width=wrap_width_title)
+    # Draw content dynamically
+    y = header_h + 20
+    title_lines = wrap_text_px(details["Job Post Title"], font_title, safe_width)
     for line in title_lines:
-        draw.text((width/2, y_position), line, font=font_bold, fill=TEXT_COLOR, anchor="ms")
-        y_position += font_bold.getbbox(line)[3] + 15
-    y_position += 30
+        d.text((width//2, y), line, font=font_title, fill=TEXT_COLOR, anchor="ma")
+        y += font_title.getbbox(line)[3] - font_title.getbbox(line)[1] + 8
+    y += 18
 
-    # Detail Items with Emojis
     emoji_map = {"Post Names": "💼", "Age Limit": "👤", "Salary": "💰", "Selection Process": "📝"}
-    detail_items = {k: v for k, v in details.items() if k in emoji_map}
-    for key, value in detail_items.items():
-        label = f"{emoji_map.get(key, '')} {key}:"
-        draw.text((margin, y_position), label, font=font_small, fill=ACCENT_COLOR)
-        y_position += font_small.getbbox(label)[3] + 10
-        value_lines = textwrap.wrap(str(value), width=wrap_width_details)
-        for line in value_lines:
-            draw.text((margin, y_position), line, font=font_regular, fill=TEXT_COLOR)
-            y_position += font_regular.getbbox(line)[3] + 10
-        y_position += 35
+    for k in ["Post Names", "Age Limit", "Salary", "Selection Process"]:
+        val = details[k]
+        label_line = f"{emoji_map[k]} {k}:"
+        d.text((margin, y), label_line, font=font_label, fill=ACCENT_COLOR)
+        y += font_label.getbbox(label_line)[3] - font_label.getbbox(label_line)[1] + 5
+        for line in wrap_text_px(val, font_body, safe_width):
+            d.text((margin, y), line, font=font_body, fill=TEXT_COLOR)
+            y += font_body.getbbox(line)[3] - font_body.getbbox(line)[1] + 5
+        y += 20
 
-    # --- Footer Elements with Fixed Positions ---
-    box_height = 180
-    box_y_start = height - 160 - box_height
-    draw.rectangle([margin - 20, box_y_start, width - margin + 20, box_y_start + box_height], fill=ACCENT_COLOR)
-    draw.text((width/2, box_y_start + 55), "Last Date to Apply", font=font_small, fill=BG_COLOR, anchor="ms")
-    draw.text((width/2, box_y_start + 125), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
-    
-    final_cta = random.choice(cta_templates).format(keyword=random.choice(keywords))
-    draw.text((width/2, height - 80), final_cta, font=font_small, fill=ACCENT_COLOR, anchor="ms")
+    # Last Date box (fixed above footer)
+    box_y = height - reserved_bottom + 30
+    d.rounded_rectangle([margin-20, box_y, width-margin+20, box_y+180], radius=20, fill=ACCENT_COLOR)
+    d.text((width//2, box_y+55), "Last Date to Apply", font=font_label, fill=BG_COLOR, anchor="mm")
+    d.text((width//2, box_y+118), details["Last Date"], font=font_title, fill=BG_COLOR, anchor="mm")
 
+    # Footer CTA
+    keywords = ["JOB", "APPLY", "LINK", "DETAILS", "INFO"]
+    ctas = ["Comment '{k}' for the link", "Type '{k}' below to get the link", "Want details? Comment '{k}'"]
+    footer_text = random.choice(ctas).format(k=random.choice(keywords))
+    d.text((width//2, height-45), footer_text, font=font_footer, fill=ACCENT_COLOR, anchor="mm")
     return img
 
-# --- Streamlit UI (No changes needed) ---
+# --- Streamlit UI ---
 st.set_page_config(page_title="AI Job Post Generator", layout="centered")
 st.title("🚀 AI Job Post Image Generator")
-st.markdown("Enter a job post URL to create a unique, professional social media image with a perfect, no-trim layout.")
-social_media_sizes = {"9:16 Story (1080x1920)": (1080, 1920), "Instagram Post (1080x1080)": (1080, 1080), "Facebook Post (1200x630)": (1200, 630)}
-url = st.text_input("Enter the Job Post URL:", placeholder="https://newgovtjobalert.com/...")
+url = st.text_input("Enter Job Post URL:", "")
+sizes = {
+    "9:16 Story (1080x1920)": (1080, 1920),
+    "Instagram (1080x1080)": (1080, 1080),
+    "Facebook (1200x630)": (1200, 630)
+}
 if st.button("Generate Image"):
     if url:
-        with st.spinner("Analyzing page and building perfect design..."):
-            job_details = get_job_details(url)
-            if job_details:
-                generated_image = create_job_post_image(job_details)
-                if generated_image:
-                    st.success("Image Generated Successfully!"); st.image(generated_image, caption="Preview (9:16 Story)", use_column_width=True)
-                    st.markdown("---"); st.subheader("Download in Any Size")
-                    for name, size in social_media_sizes.items():
-                        resized_img = generated_image.resize(size, Image.Resampling.LANCZOS); buf = BytesIO(); resized_img.save(buf, format="PNG")
-                        st.download_button(label=f"Download {name}", data=buf.getvalue(), file_name=f"job_post_{size[0]}x{size[1]}.png", mime="image/png")
-    else: st.warning("Please enter a URL.")
+        with st.spinner("Fetching & generating..."):
+            details = get_job_details(url)
+            if details:
+                img = create_job_post_image(details)
+                st.image(img, use_column_width=True)
+                for name, size in sizes.items():
+                    buf = BytesIO()
+                    img.resize(size, Image.LANCZOS).save(buf, format="PNG")
+                    st.download_button(f"Download {name}", buf.getvalue(), file_name=f"job_post_{size[0]}x{size[1]}.png", mime="image/png")
+    else:
+        st.warning("Please enter a URL.")
