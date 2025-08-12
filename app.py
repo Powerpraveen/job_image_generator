@@ -6,7 +6,9 @@ import textwrap
 from io import BytesIO
 import re
 from datetime import datetime
+import random
 
+# --- (The intelligent get_job_details function remains the same) ---
 def get_job_details(url):
     """
     Fetches and parses job details from a URL with intelligent pattern matching.
@@ -20,25 +22,19 @@ def get_job_details(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         page_text = soup.get_text()
 
-        # --- Intelligent Extraction Logic ---
-
-        # 1. Job Post Title
         title_element = soup.find('h1', class_='entry-title')
         title = title_element.text.strip() if title_element else "Title Not Found"
 
-        # 2. Post Names (finds all possibilities)
         post_names = set()
         for row in soup.find_all('tr'):
             cells = row.find_all('td')
             if len(cells) > 1 and 'post name' in cells[0].get_text(strip=True).lower():
                 post_names.add(cells[1].get_text(strip=True))
-        # Fallback search in text
         if not post_names:
             matches = re.findall(r"Name of Post\s*:\s*(.+)", page_text, re.IGNORECASE)
             for match in matches:
                 post_names.add(match.strip())
         
-        # 3. Age Limit (flexible parsing)
         age_limit_str = "Not Found"
         age_matches = re.search(r'(\d{1,2})\s*to\s*(\d{1,2})\s*years', page_text, re.IGNORECASE)
         if age_matches:
@@ -48,24 +44,20 @@ def get_job_details(url):
             if max_age_match:
                 age_limit_str = f"Up to {max_age_match.group(1)} Years"
 
-        # 4. Salary (finds the highest value)
         salary_str = "Not Found"
-        # Matches numbers like 25,500 or 81100
         salaries = re.findall(r'₹?\s*([\d,]+)\s*(?:/-)?', page_text)
         numeric_salaries = [int(s.replace(',', '')) for s in salaries if s.replace(',', '').isdigit() and int(s.replace(',', '')) > 1000]
         if numeric_salaries:
             salary_str = f"Up to ₹{max(numeric_salaries):,}/-"
 
-        # 5. Last Date (finds the latest date)
         last_date_str = "Not Found"
-        # Matches DD-MM-YYYY, DD/MM/YYYY
         date_matches = re.findall(r'(\d{2})[/-](\d{2})[/-](\d{4})', page_text)
         parsed_dates = []
         for d, m, y in date_matches:
             try:
                 parsed_dates.append(datetime(int(y), int(m), int(d)))
             except ValueError:
-                continue # Ignore invalid dates like 99/99/9999
+                continue
         if parsed_dates:
             latest_date = max(parsed_dates)
             last_date_str = latest_date.strftime('%d %B %Y')
@@ -83,64 +75,84 @@ def get_job_details(url):
         st.error(f"Failed to fetch URL: {e}")
         return None
 
+# --- NEW: Re-engineered Image Creation Function ---
 def create_job_post_image(details):
-    # This function remains the same as before, no changes needed here.
+    """
+    Creates a visually dynamic image with random palettes and engaging text.
+    """
     if not details:
         return None
 
-    BG_COLOR = (22, 28, 45)
-    TEXT_COLOR = (255, 255, 255)
-    ACCENT_COLOR = (0, 217, 255)
-    
+    # --- NEW: Curated list of soothing, high-contrast color palettes ---
+    palettes = [
+        {"bg": (245, 245, 245), "text": (40, 40, 40), "accent": (26, 140, 140)},      # Off-white, Charcoal, Muted Teal
+        {"bg": (230, 240, 255), "text": (50, 60, 80), "accent": (0, 102, 204)},       # Light Blue, Dark Slate, Royal Blue
+        {"bg": (255, 248, 240), "text": (60, 45, 45), "accent": (200, 80, 70)},       # Soft Cream, Brown, Terracotta
+        {"bg": (34, 40, 49),    "text": (238, 238, 238), "accent": (0, 173, 181)},   # Dark Slate, Light Gray, Bright Cyan
+        {"bg": (253, 253, 253), "text": (20, 20, 20), "accent": (96, 108, 129)},      # White, Near Black, Slate Gray
+    ]
+    palette = random.choice(palettes)
+    BG_COLOR, TEXT_COLOR, ACCENT_COLOR = palette["bg"], palette["text"], palette["accent"]
+
+    # --- NEW: List of engaging footer texts ---
+    footer_texts = [
+        "Share with friends who need this!", "Tag someone who should apply!", "Don't miss this opportunity!",
+        "Your next career move is here.", "Apply now & spread the word!", "Is this the job for you? Apply now!",
+        "Help someone find their dream job.", "Good luck with your application!", "Visit the website for more details.",
+        "Check the official notification to apply."
+    ]
+
     width, height = 1080, 1920
     img = Image.new('RGB', (width, height), color=BG_COLOR)
     draw = ImageDraw.Draw(img)
 
     try:
-        font_bold = ImageFont.truetype("Poppins-Bold.ttf", size=85)
+        font_bold = ImageFont.truetype("Poppins-Bold.ttf", size=80)
         font_regular = ImageFont.truetype("Poppins-Regular.ttf", size=50)
-        font_label = ImageFont.truetype("Poppins-Regular.ttf", size=45)
+        font_small = ImageFont.truetype("Poppins-Regular.ttf", size=45)
     except IOError:
-        st.error("Font files not found! Please ensure 'Poppins-Bold.ttf' and 'Poppins-Regular.ttf' are in the repository.")
+        st.error("Font files are missing! Ensure Poppins-Bold.ttf and Poppins-Regular.ttf are in your repository.")
         return None
 
-    draw.rectangle([0, 0, width, 250], fill=ACCENT_COLOR)
-    draw.text((width/2, 125), "GOVERNMENT JOB ALERT", font=font_regular, fill=BG_COLOR, anchor="mm")
+    # --- NEW: Dynamic Header based on text length ---
+    total_text_length = sum(len(str(v)) for v in details.values())
+    header_text = "Job Update" if total_text_length > 200 else "Government Job Alert"
+    header_font = ImageFont.truetype("Poppins-Bold.ttf", size=60 if header_text == "Job Update" else 50)
     
-    wrapped_title = textwrap.wrap(details["Job Post Title"], width=20)
-    y_position = 350
+    draw.rectangle([0, 0, width, 200], fill=ACCENT_COLOR)
+    draw.text((width/2, 100), header_text, font=header_font, fill=BG_COLOR, anchor="mm")
+
+    # --- Main Content ---
+    y_position = 320
+    wrapped_title = textwrap.wrap(details["Job Post Title"], width=22)
     for line in wrapped_title:
         draw.text((width/2, y_position), line, font=font_bold, fill=TEXT_COLOR, anchor="ms")
-        y_position += 90
+        y_position += 85
 
     y_position += 80
     detail_items = {k: v for k, v in details.items() if k not in ["Job Post Title", "Last Date"]}
-
     for key, value in detail_items.items():
-        draw.text((100, y_position), f"{key}:", font=font_label, fill=ACCENT_COLOR)
-        
-        # Wrap detail text if it's too long
-        wrapped_value = textwrap.wrap(value, width=30)
+        draw.text((100, y_position), f"{key}:", font=font_small, fill=ACCENT_COLOR)
         value_y = y_position + 60
+        wrapped_value = textwrap.wrap(str(value), width=35)
         for line in wrapped_value:
             draw.text((100, value_y), line, font=font_regular, fill=TEXT_COLOR)
             value_y += 60
+        y_position = value_y + 30
 
-        y_position += 120 + (len(wrapped_value) * 60) # Adjust spacing based on wrapped lines
-
+    # --- Last Date Box & Engaging Footer ---
     draw.rectangle([50, y_position, width - 50, y_position + 200], fill=ACCENT_COLOR)
-    draw.text((width/2, y_position + 70), "Last Date to Apply", font=font_label, fill=BG_COLOR, anchor="ms")
+    draw.text((width/2, y_position + 70), "Last Date to Apply", font=font_small, fill=BG_COLOR, anchor="ms")
     draw.text((width/2, y_position + 140), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
     
-    draw.text((width/2, height - 100), "newgovtjobalert.com", font=font_label, fill=ACCENT_COLOR, anchor="ms")
+    draw.text((width/2, height - 100), random.choice(footer_texts), font=font_small, fill=ACCENT_COLOR, anchor="ms")
 
     return img
 
 # --- Streamlit App Interface (No changes needed from here down) ---
-st.set_page_config(page_title="Job Post Image Generator", layout="centered")
+st.set_page_config(page_title="Dynamic Job Post Generator", layout="centered")
 st.title("🚀 Intelligent Job Post Image Generator")
-
-st.markdown("Enter a URL from a job posting site. The tool will intelligently find the details and create a professional social media image.")
+st.markdown("Enter a job post URL. The tool will intelligently create a unique, professional social media image every time.")
 
 social_media_sizes = {
     "9:16 Story (1080x1920)": (1080, 1920),
@@ -153,7 +165,7 @@ url = st.text_input("Enter the Job Post URL:", placeholder="https://newgovtjobal
 
 if st.button("Generate Image"):
     if url:
-        with st.spinner("Analyzing page and creating image..."):
+        with st.spinner("Analyzing page and creating a unique design..."):
             job_details = get_job_details(url)
             if job_details:
                 generated_image = create_job_post_image(job_details)
@@ -163,7 +175,7 @@ if st.button("Generate Image"):
                     st.image(generated_image, caption="Preview (9:16 Story)", use_column_width=True)
                     
                     st.markdown("---")
-                    st.subheader("Download Your Image")
+                    st.subheader("Download in Any Size")
                     
                     for name, size in social_media_sizes.items():
                         resized_img = generated_image.resize(size, Image.Resampling.LANCZOS)
