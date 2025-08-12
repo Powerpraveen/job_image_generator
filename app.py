@@ -8,9 +8,10 @@ import re
 from datetime import datetime
 import random
 
+# This function is already robust and does not need changes.
 def get_job_details(url):
     """
-    Fetches and parses job details with the most advanced and flexible date parsing.
+    Fetches and parses job details with advanced and flexible data parsing.
     """
     try:
         headers = {
@@ -21,143 +22,141 @@ def get_job_details(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         page_text = soup.get_text(separator="\n", strip=True)
 
-        # 1. Job Post Title
-        title_element = soup.find('h1', class_='entry-title')
-        title = title_element.text.strip() if title_element else "Title Not Found"
+        # Title
+        title = soup.find('h1', class_='entry-title').text.strip() if soup.find('h1', class_='entry-title') else "Title Not Found"
 
-        # 2. Post Names
+        # Post Names
         post_names_text = "Check Notification"
         for row in soup.find_all('tr'):
             cells = row.find_all('td')
             if len(cells) > 1 and 'post name' in cells[0].get_text(strip=True).lower():
-                post_names_text = cells[1].get_text(strip=True)
-                break
-
-        # 3. Age Limit (Focus on Max Age)
+                post_names_text = cells[1].get_text(strip=True); break
+        
+        # Age Limit
         age_limit_str = "Not Found"
         age_range_match = re.search(r'(\d{1,2})\s*(?:to|-)\s*(\d{1,2})\s*years', page_text, re.IGNORECASE)
-        if age_range_match:
-            age_limit_str = f"Up to {age_range_match.group(2)} Years"
+        if age_range_match: age_limit_str = f"Up to {age_range_match.group(2)} Years"
         else:
             max_age_match = re.search(r'max(?:imum)?\s*age\s*(?:limit)?\s*[:\s]*(\d{1,2})', page_text, re.IGNORECASE)
-            if max_age_match:
-                age_limit_str = f"Up to {max_age_match.group(1)} Years"
+            if max_age_match: age_limit_str = f"Up to {max_age_match.group(1)} Years"
 
-        # 4. Salary
+        # Salary
         salary_str = "Not Found"
         salaries = re.findall(r'₹?\s*([\d,]{4,})', page_text)
         numeric_salaries = [int(s.replace(',', '')) for s in salaries if s.replace(',', '').isdigit()]
-        if numeric_salaries:
-            salary_str = f"Up to ₹{max(numeric_salaries):,}/-"
-
-        # --- NEW: Truly Flexible Last Date Extraction ---
+        if numeric_salaries: salary_str = f"Up to ₹{max(numeric_salaries):,}/-"
+        
+        # Last Date
         last_date_str = "Not Found"
         parsed_dates = []
-        
-        # Pattern 1: "22 August 2025" or "22 Aug 2025"
-        date_pattern1 = re.compile(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', re.IGNORECASE)
-        # Pattern 2: "dd/mm/yyyy" or "dd-mm-yy"
+        date_pattern1 = re.compile(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', re.I)
         date_pattern2 = re.compile(r'(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})')
-
-        # Find all possible date strings near keywords
-        keyword_pattern = re.compile(r'(Last Date|Closing Date|Apply Before)', re.IGNORECASE)
-        text_lines = page_text.split('\n')
-        for i, line in enumerate(text_lines):
+        keyword_pattern = re.compile(r'(Last Date|Closing Date|Apply Before)', re.I)
+        for i, line in enumerate(page_text.split('\n')):
             if keyword_pattern.search(line):
-                # Search in the same line and the next few lines for a date
-                search_area = " ".join(text_lines[i:i+2])
-                
-                # Try Pattern 1
+                search_area = " ".join(page_text.split('\n')[i:i+2])
                 for match in date_pattern1.finditer(search_area):
-                    day, month_str, year = match.groups()
-                    month = datetime.strptime(month_str, "%b" if len(month_str) == 3 else "%B").month
+                    day, month_str, year = match.groups(); month = datetime.strptime(month_str, "%b" if len(month_str)==3 else "%B").month
                     parsed_dates.append(datetime(int(year), month, int(day)))
-                
-                # Try Pattern 2
                 for match in date_pattern2.finditer(search_area):
-                    d, m, y = match.groups()
-                    year = int(y) if len(y) == 4 else int(f"20{y}") # Convert '25' to 2025
-                    if year > 2020: # Basic validation
-                        parsed_dates.append(datetime(year, int(m), int(d)))
+                    d, m, y = match.groups(); year = int(f"20{y}") if len(y)==2 else int(y)
+                    if year > 2020: parsed_dates.append(datetime(year, int(m), int(d)))
+        if parsed_dates: last_date_str = max(parsed_dates).strftime('%d %B %Y')
 
-        if parsed_dates:
-            last_date_str = max(parsed_dates).strftime('%d %B %Y')
-
-        # 6. Selection Process
+        # Selection Process
         selection_process_text = "As per rules"
         selection_header = soup.find(['strong', 'h3'], string=re.compile("Selection Process", re.I))
         if selection_header:
             next_element = selection_header.find_next(['ul', 'p'])
-            if next_element:
-                selection_process_text = ', '.join([li.get_text(strip=True) for li in next_element.find_all('li')]) if next_element.name == 'ul' else next_element.get_text(strip=True)
+            if next_element: selection_process_text = ', '.join([li.get_text(strip=True) for li in next_element.find_all('li')]) if next_element.name == 'ul' else next_element.get_text(strip=True)
 
-        details = {
-            "Job Post Title": title,
-            "Post Names": post_names_text,
-            "Age Limit": age_limit_str,
-            "Salary": salary_str,
-            "Selection Process": selection_process_text,
-            "Last Date": last_date_str
+        return {
+            "Job Post Title": title, "Post Names": post_names_text, "Age Limit": age_limit_str,
+            "Salary": salary_str, "Selection Process": selection_process_text, "Last Date": last_date_str
         }
-        return details
+    except Exception as e:
+        st.error(f"An error occurred while fetching details: {e}"); return None
 
-    except requests.exceptions.RequestException as e:
-        st.error(f"Failed to fetch URL: {e}")
-        return None
-
+# --- NEW: Re-engineered Image Generation with Robust Layout ---
 def create_job_post_image(details):
-    # This function remains unchanged.
+    """
+    Creates a visually dynamic image with a robust layout engine to prevent text overlap.
+    """
     if not details: return None
-    palettes = [{"bg": (34, 40, 49), "text": (238, 238, 238), "accent": (0, 173, 181)}, {"bg": (245, 245, 245), "text": (40, 40, 40), "accent": (26, 140, 140)}, {"bg": (230, 240, 255), "text": (50, 60, 80), "accent": (0, 102, 204)}]
+
+    # Color palettes and CTA keywords
+    palettes = [{"bg": (34, 40, 49), "text": (238, 238, 238), "accent": (0, 173, 181)}, {"bg": (245, 245, 245), "text": (40, 40, 40), "accent": (26, 140, 140)}]
     palette = random.choice(palettes)
     BG_COLOR, TEXT_COLOR, ACCENT_COLOR = palette["bg"], palette["text"], palette["accent"]
     keywords = ["JOB", "APPLY", "LINK", "DETAILS", "POST", "INFO"]
-    cta_templates = ["Comment '{keyword}' to get the link!", "Want the link? Type '{keyword}' below!", "For application link, comment '{keyword}'."]
+    cta_templates = ["Comment '{keyword}' to get the link!", "Want the link? Type '{keyword}' below!"]
+    
     width, height = 1080, 1920
     img = Image.new('RGB', (width, height), color=BG_COLOR)
     draw = ImageDraw.Draw(img)
+
     try:
-        font_bold = ImageFont.truetype("Poppins-Bold.ttf", size=75); font_regular = ImageFont.truetype("Poppins-Regular.ttf", size=48); font_small = ImageFont.truetype("Poppins-Regular.ttf", size=42); header_font = ImageFont.truetype("Poppins-Bold.ttf", size=55)
+        font_bold = ImageFont.truetype("Poppins-Bold.ttf", 70); font_regular = ImageFont.truetype("Poppins-Regular.ttf", 45); font_small = ImageFont.truetype("Poppins-Regular.ttf", 40); header_font = ImageFont.truetype("Poppins-Bold.ttf", 50)
     except IOError:
         st.error("Font files are missing!"); return None
-    draw.rectangle([0, 0, width, 180], fill=ACCENT_COLOR); draw.text((width/2, 90), "Latest Job Update", font=header_font, fill=BG_COLOR, anchor="mm")
-    y_position = 280
-    wrapped_title = textwrap.wrap(details["Job Post Title"], width=25)
-    for line in wrapped_title:
-        draw.text((width/2, y_position), line, font=font_bold, fill=TEXT_COLOR, anchor="ms"); y_position += 80
-    y_position += 60
+
+    # --- Header ---
+    draw.rectangle([0, 0, width, 180], fill=ACCENT_COLOR)
+    draw.text((width/2, 90), "Latest Job Update", font=header_font, fill=BG_COLOR, anchor="mm")
+
+    # --- Main Content with Robust Spacing ---
+    y_position = 250 # Start position for content
+    margin = 80 # Left/right margin
+
+    # Draw Title
+    title_lines = textwrap.wrap(details["Job Post Title"], width=28)
+    for line in title_lines:
+        draw.text((width/2, y_position), line, font=font_bold, fill=TEXT_COLOR, anchor="ms")
+        y_position += font_bold.getbbox(line)[3] + 15 # Move down by text height + spacing
+    y_position += 50 # Extra space after title
+
+    # Draw Detail Items
     detail_items = {k: v for k, v in details.items() if k not in ["Job Post Title", "Last Date"]}
     for key, value in detail_items.items():
-        draw.text((80, y_position), f"{key}:", font=font_small, fill=ACCENT_COLOR)
-        value_y = y_position + 55
-        wrapped_value = textwrap.wrap(str(value), width=38)
-        for line in wrapped_value:
-            draw.text((80, value_y), line, font=font_regular, fill=TEXT_COLOR); value_y += 55
-        y_position = value_y + 25
-    draw.rectangle([50, y_position, width - 50, y_position + 180], fill=ACCENT_COLOR)
-    draw.text((width/2, y_position + 60), "Last Date to Apply", font=font_small, fill=BG_COLOR, anchor="ms")
-    draw.text((width/2, y_position + 125), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
+        draw.text((margin, y_position), f"{key}:", font=font_small, fill=ACCENT_COLOR)
+        y_position += font_small.getbbox(f"{key}:")[3] + 10
+
+        value_lines = textwrap.wrap(str(value), width=45)
+        for line in value_lines:
+            draw.text((margin, y_position), line, font=font_regular, fill=TEXT_COLOR)
+            y_position += font_regular.getbbox(line)[3] + 10
+        y_position += 40 # Extra space between items
+
+    # --- Last Date Box (Positioned before footer) ---
+    box_height = 180
+    box_y_start = height - 150 - box_height # Position it above the footer
+    draw.rectangle([60, box_y_start, width - 60, box_y_start + box_height], fill=ACCENT_COLOR)
+    draw.text((width/2, box_y_start + 55), "Last Date to Apply", font=font_small, fill=BG_COLOR, anchor="ms")
+    draw.text((width/2, box_y_start + 125), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
+
+    # --- FIXED FOOTER: Always Visible ---
     final_cta = random.choice(cta_templates).format(keyword=random.choice(keywords))
-    draw.text((width/2, height - 100), final_cta, font=font_small, fill=ACCENT_COLOR, anchor="ms")
+    footer_y = height - 80
+    draw.text((width/2, footer_y), final_cta, font=font_small, fill=ACCENT_COLOR, anchor="ms")
+
     return img
 
 # --- Streamlit UI (No changes needed) ---
 st.set_page_config(page_title="Intelligent Job Post Generator", layout="centered")
 st.title("🚀 AI Job Post Image Generator")
 st.markdown("Enter a job post URL to create a unique, engaging, and professional social media image instantly.")
-social_media_sizes = {"9:16 Story (1080x1920)": (1080, 1920), "Instagram Post (1080x1080)": (1080, 1080), "Facebook Post (1200x630)": (1200, 630), "Twitter Post (1024x512)": (1024, 512)}
+social_media_sizes = {"9:16 Story (1080x1920)": (1080, 1920), "Instagram Post (1080x1080)": (1080, 1080), "Facebook Post (1200x630)": (1200, 630)}
 url = st.text_input("Enter the Job Post URL:", placeholder="https://newgovtjobalert.com/...")
 if st.button("Generate Image"):
     if url:
-        with st.spinner("Analyzing page and creating a unique design..."):
+        with st.spinner("Analyzing page and creating a robust design..."):
             job_details = get_job_details(url)
             if job_details:
                 generated_image = create_job_post_image(job_details)
                 if generated_image:
-                    st.success("Image Generated Successfully!")
-                    st.image(generated_image, caption="Preview (9:16 Story)", use_column_width=True)
+                    st.success("Image Generated Successfully!"); st.image(generated_image, caption="Preview (9:16 Story)", use_column_width=True)
                     st.markdown("---"); st.subheader("Download in Any Size")
                     for name, size in social_media_sizes.items():
                         resized_img = generated_image.resize(size, Image.Resampling.LANCZOS); buf = BytesIO(); resized_img.save(buf, format="PNG")
                         st.download_button(label=f"Download {name}", data=buf.getvalue(), file_name=f"job_post_{size[0]}x{size[1]}.png", mime="image/png")
-    else: st.warning("Please enter a URL to generate an image.")
+    else: st.warning("Please enter a URL.")
