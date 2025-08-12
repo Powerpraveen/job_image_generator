@@ -2,13 +2,15 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
-import os
 import textwrap
 from io import BytesIO
 
-# --- (This is the same web scraping function as before) ---
 def get_job_details(url):
-    try's a header to mimic a browser visit
+    """
+    Fetches and parses job details from a given URL.
+    """
+    try:
+        # Use a header to mimic a browser visit
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -27,8 +29,8 @@ def get_job_details(url):
             "Last Date": "Not Found"
         }
 
+        # Scan for details within table rows or list items
         for row in soup.find_all(['tr', 'li']):
-            row_text = row.get_text().lower()
             cells = row.find_all('td')
             if len(cells) > 1:
                 key = cells[0].get_text().lower()
@@ -47,8 +49,10 @@ def get_job_details(url):
         st.error(f"Failed to fetch URL: {e}")
         return None
 
-# --- (This is the enhanced image creation function, but it now RETURNS the image) ---
 def create_job_post_image(details):
+    """
+    Creates a visually appealing image with the job details.
+    """
     if not details:
         return None
 
@@ -69,15 +73,18 @@ def create_job_post_image(details):
         st.error("Font files not found! Please ensure 'Poppins-Bold.ttf' and 'Poppins-Regular.ttf' are in the repository.")
         return None
 
+    # Header
     draw.rectangle([0, 0, width, 250], fill=ACCENT_COLOR)
     draw.text((width/2, 125), "GOVERNMENT JOB ALERT", font=font_regular, fill=BG_COLOR, anchor="mm")
     
+    # Wrapped Job Title
     wrapped_title = textwrap.wrap(details["Job Post Title"], width=20)
     y_position = 350
     for line in wrapped_title:
         draw.text((width/2, y_position), line, font=font_bold, fill=TEXT_COLOR, anchor="ms")
         y_position += 90
 
+    # Details Section
     y_position += 80
     detail_items = {k: v for k, v in details.items() if k not in ["Job Post Title", "Last Date"]}
 
@@ -86,10 +93,12 @@ def create_job_post_image(details):
         draw.text((100, y_position + 60), value, font=font_regular, fill=TEXT_COLOR)
         y_position += 180
 
+    # Last Date Section
     draw.rectangle([50, y_position, width - 50, y_position + 200], fill=ACCENT_COLOR)
     draw.text((width/2, y_position + 70), "Last Date to Apply", font=font_label, fill=BG_COLOR, anchor="ms")
     draw.text((width/2, y_position + 140), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
     
+    # Footer
     draw.text((width/2, height - 100), "newgovtjobalert.com", font=font_label, fill=ACCENT_COLOR, anchor="ms")
 
     return img
@@ -116,7 +125,6 @@ if st.button("Generate Image"):
         with st.spinner("Fetching details and creating image..."):
             job_details = get_job_details(url)
             if job_details:
-                # Generate the base 9:16 image
                 generated_image = create_job_post_image(job_details)
                 
                 if generated_image:
@@ -126,12 +134,9 @@ if st.button("Generate Image"):
                     st.markdown("---")
                     st.subheader("Download Your Image")
                     
-                    # Create download buttons for each size
                     for name, size in social_media_sizes.items():
-                        # Resize the high-quality base image
-                        resized_img = generated_image.resize(size, Image.LANCZOS)
+                        resized_img = generated_image.resize(size, Image.Resampling.LANCZOS)
                         
-                        # Convert image to bytes for downloading
                         buf = BytesIO()
                         resized_img.save(buf, format="PNG")
                         byte_im = buf.getvalue()
