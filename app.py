@@ -118,7 +118,7 @@ def get_job_details(url):
                     if len(txt) > 3:
                         selection = txt
 
-        # Last Date: handle “22 August 2025”, “22 Aug 2025”, “22-08-2025”, “2/8/25”
+        # Last Date: handle multiple formats
         last_date = "Not Found"
         parsed = []
 
@@ -141,7 +141,7 @@ def get_job_details(url):
             except Exception:
                 pass
 
-        # 3) Prefer lines with last/closing date keywords
+        # 3) Prefer last date lines
         lines = page_text.split("\n")
         key = re.compile(r'(Last\s*Date|Closing\s*Date|Apply\s*Before)', re.I)
         for i, line in enumerate(lines):
@@ -180,12 +180,11 @@ def get_job_details(url):
         st.error(f"Scraping error: {e}")
         return None
 
-# -------------------- Poster renderer (no-overlap engine) --------------------
+# -------------------- Poster renderer with no-overlap engine --------------------
 def create_job_post_image(details):
     if not details:
         return None
 
-    # Professional palettes
     palettes = [
         {"bg": (10, 25, 47), "text": (229, 231, 235), "accent": (5, 150, 105)},   # Navy + Emerald
         {"bg": (249, 250, 251), "text": (17, 24, 39), "accent": (37, 99, 235)},   # Light + Blue
@@ -195,16 +194,14 @@ def create_job_post_image(details):
     pal = random.choice(palettes)
     BG, TXT, ACC = pal["bg"], pal["text"], pal["accent"]
 
-    # Canvas and layout constants
     W, H = 1080, 1920
     margin = 120
     safe_w = W - 2 * margin
     header_h = 168
     date_box_h = 178
     footer_h = 90
-    reserved_bottom = 30 + date_box_h + 24 + footer_h  # padding + box + padding + footer
+    reserved_bottom = 30 + date_box_h + 24 + footer_h
 
-    # Fonts initial
     title_px = 64
     label_px = 44
     body_px = 46
@@ -217,12 +214,10 @@ def create_job_post_image(details):
     ft_header = load_font("Poppins-Bold.ttf", header_px)
     ft_footer = load_font("Poppins-Regular.ttf", footer_px)
 
-    # Spacing
     gap_small = 8
     gap_body = 10
     gap_block = 22
 
-    # Content
     title = details.get("Job Post Title", "Job Update")
     fields = [
         ("Post Names", "💼", details.get("Post Names", "")),
@@ -232,7 +227,6 @@ def create_job_post_image(details):
     ]
     last_date_val = details.get("Last Date", "")
 
-    # CTA
     keys = ["JOB", "LINK", "APPLY", "DETAILS", "INFO", "POST"]
     ctas = [
         "Comment '{k}' to get the link",
@@ -242,7 +236,6 @@ def create_job_post_image(details):
     ]
     footer_text = random.choice(ctas).format(k=random.choice(keys))
 
-    # Function to measure total height
     def total_height():
         t_lines = wrap_text_px(title, ft_title, safe_w)
         t_h = text_block_height(t_lines, ft_title, gap_small) + 6
@@ -260,7 +253,6 @@ def create_job_post_image(details):
 
         return header_h + 18 + t_h + 16 + d_h + reserved_bottom
 
-    # Auto-shrink fonts if content too tall (prevents overlap)
     for _ in range(12):
         if total_height() <= H - 4:
             break
@@ -277,15 +269,12 @@ def create_job_post_image(details):
         ft_header = load_font("Poppins-Bold.ttf", header_px)
         ft_footer = load_font("Poppins-Regular.ttf", footer_px)
 
-    # Draw
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # Header
     draw.rectangle([0, 0, W, header_h], fill=ACC)
     draw.text((W//2, header_h//2), "Latest Job Update", font=ft_header, fill=BG, anchor="mm")
 
-    # Favicon sized to header text height
     fav_url = details.get("Favicon URL")
     if fav_url:
         try:
@@ -303,7 +292,6 @@ def create_job_post_image(details):
 
     y = header_h + 18
 
-    # Title
     t_lines = wrap_text_px(title, ft_title, safe_w)
     for line in t_lines:
         draw.text((W//2, y), line, font=ft_title, fill=TXT, anchor="ma")
@@ -311,7 +299,6 @@ def create_job_post_image(details):
         y += (bb[3] - bb[1]) + gap_small
     y += 12
 
-    # Details
     for label, emoji, value in fields:
         if not value:
             continue
@@ -327,13 +314,11 @@ def create_job_post_image(details):
             y += (vb[3] - vb[1]) + gap_body
         y += gap_block
 
-    # Last Date box (fixed above footer)
     box_y = H - reserved_bottom + 30
     draw.rounded_rectangle([margin-18, box_y, W-margin+18, box_y + date_box_h], radius=20, fill=ACC)
     draw.text((W//2, box_y + 56), "Last Date to Apply", font=ft_label, fill=BG, anchor="mm")
     draw.text((W//2, box_y + 118), last_date_val or "—", font=ft_title, fill=BG, anchor="mm")
 
-    # Footer CTA (fixed)
     draw.text((W//2, H - 44), footer_text, font=ft_footer, fill=ACC, anchor="mm")
 
     return img
@@ -342,7 +327,10 @@ def create_job_post_image(details):
 st.set_page_config(page_title="AI Job Post Image Generator", page_icon="🧰", layout="centered")
 st.title("🚀 AI Job Post Image Generator")
 
-st.markdown("Paste a job post URL. The app extracts Title, Post Name, Max Age Limit, Highest Salary, Selection Process, and the latest Last Date, then builds a poster with branding, emojis, and multiple download sizes.")
+st.markdown(
+    "Paste a job post URL. The app extracts Title, Post Name, Max Age Limit, Highest Salary, Selection Process, "
+    "and the latest Last Date, then builds a poster with branding, emojis, and multiple download sizes."
+)
 
 url = st.text_input("Job post URL")
 sizes = {
@@ -369,5 +357,5 @@ if st.button("Generate"):
                             label=f"Download {name}",
                             data=buf.getvalue(),
                             file_name=f"job_post_{wh[0]}x{wh[1]}.png",
-                            mime="image/png"
+                            mime="image/png",
                         )
