@@ -3,18 +3,48 @@ import requests
 from bs4 import BeautifulSoup
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
-import textwrap, re, random
+import re, textwrap, random
 from datetime import datetime
 from urllib.parse import urljoin
 
-# --- Scraper ---
+# ---------- Helpers for pixel-perfect text ----------
+def wrap_text_px(text, font, max_width_px):
+    words = (text or "").split()
+    if not words:
+        return [""]
+    lines, cur = [], ""
+    for w in words:
+        trial = (cur + " " + w).strip()
+        if font.getlength(trial) <= max_width_px or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+def text_block_height(lines, font, line_spacing_px):
+    h = 0
+    for line in lines:
+        bbox = font.getbbox(line or " ")
+        h += (bbox[3] - bbox[1]) + line_spacing_px
+    return h
+
+def load_font(path, size):
+    try:
+        return ImageFont.truetype(path, size)
+    except:
+        return ImageFont.load_default()
+
+# ---------- Scraper with intelligent matching ----------
 def get_job_details(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        html = requests.get(url, headers=headers, timeout=10)
-        html.raise_for_status()
-        soup = BeautifulSoup(html.text, 'html.parser')
-        text = soup.get_text(separator="\n", strip=True)
+        r = requests.get(url, headers=headers, timeout=12)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+        page_text = soup.get_text(separator="\n", strip=True)
 
         # Favicon
         favicon_url = None
@@ -23,189 +53,318 @@ def get_job_details(url):
             favicon_url = urljoin(url, icon_link["href"])
 
         # Title
-        title = soup.find("h1", class_="entry-title")
-        title_text = title.text.strip() if title else "Title Not Found"
+        title_el = soup.find("h1")
+        title = title_el.get_text(strip=True) if title_el else "Title Not Found"
 
-        # Post Names
-        post_names = "Check Notification"
+        # Post name: table first, then bold/strong, then regex fallback
+        post_name = "Check Notification"
         for row in soup.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) > 1 and "post name" in cells[0].get_text(strip=True).lower():
-                post_names = cells[1].get_text(strip=True)
+            tds = row.find_all("td")
+            if len(tds) > 1 and "post name" in tds[0].get_text(strip=True).lower():
+                post_name = tds[1].get_text(strip=True)
                 break
+        if post_name == "Check Notification":
+            for tag in soup.find_all(["strong", "b"]):
+                t = tag.get_text(" ", strip=True).lower()
+                if "post name" in t or "post" in t:
+                    sib = tag.find_next_sibling(text=True)
+                    if sib and len(sib.strip()) > 2:
+                        post_name = sib.strip()
+                        break
+        if post_name == "Check Notification":
+            m = re.search(r"(?:post\s*name|name\s*of\s*post)\s*[:\-]\s*(.+)", page_text, re.I)
+            if m:
+                post_name = m.group(1).split("\n")[0].strip()
 
-        # Age Limit - show max
+        # Age limit: prefer ranges to show max
         age_limit = "Not Found"
-        m = re.search(r'(\d{1,2})\s*(?:to|-)\s*(\d{1,2})\s*years', text, re.I)
+        m = re.search(r'(\d{1,2})\s*(?:to|-|–)\s*(\d{1,2})\s*years', page_text, re.I)
         if m:
             age_limit = f"Up to {m.group(2)} Years"
         else:
-            m = re.search(r'max(?:imum)?\s*age\s*(?:limit)?\s*[:\s]*(\d{1,2})', text, re.I)
+            m = re.search(r'max(?:imum)?\s*age\s*(?:limit)?\s*[:\-]?\s*(\d{1,2})', page_text, re.I)
             if m:
                 age_limit = f"Up to {m.group(1)} Years"
 
-        # Salary - pick highest
+        # Salary: pick highest numeric in the page (ignore small numbers)
         salary = "Not Found"
-        salaries = re.findall(r'₹?\s*([\d,]{4,})', text)
-        nums = [int(s.replace(',', '')) for s in salaries if s.replace(',', '').isdigit()]
+        nums = []
+        for s in re.findall(r'(?:₹|\Rs\.?)?\s*([\d,]{4,})(?:\s*/-)?', page_text, re.I):
+            clean = s.replace(",", "")
+            if clean.isdigit():
+                v = int(clean)
+                if v >= 3000:
+                    nums.append(v)
         if nums:
             salary = f"Up to ₹{max(nums):,}/-"
 
-        # Last Date - flexible parsing, pick latest
-        last_date = "Not Found"
-        date_matches = re.findall(r'(\d{1,2})[./ -]\s?(\d{1,2}|[A-Za-z]{3,9})[a-z]*[./ -]\s?(\d{2,4})', text)
-        parsed_dates = []
-        for d, mth, y in date_matches:
-            try:
-                if mth.isalpha():
-                    mth_num = datetime.strptime(mth[:3], "%b").month
+        # Selection process: header + following list/para
+        selection = "As per rules"
+        sel_header = soup.find(['strong', 'h3', 'h4'], string=re.compile(r"Selection Process", re.I))
+        if sel_header:
+            nxt = sel_header.find_next(['ul', 'ol', 'p', 'div'])
+            if nxt:
+                if nxt.name in ('ul', 'ol'):
+                    items = [li.get_text(" ", strip=True) for li in nxt.find_all('li')]
+                    if items:
+                        selection = ", ".join(items)
                 else:
-                    mth_num = int(mth)
-                year_num = int(f"20{y}") if len(y) == 2 else int(y)
-                if year_num > 2020:
-                    parsed_dates.append(datetime(year_num, mth_num, int(d)))
+                    txt = nxt.get_text(" ", strip=True)
+                    if len(txt) > 3:
+                        selection = txt
+
+        # Last date: handle 22 August 2025, 22 Aug 2025, 22-08-2025, 2/8/25 etc.
+        last_date = "Not Found"
+        parsed = []
+
+        # Full scan for many formats
+        # 1) D Month YYYY
+        for d, mon, y in re.findall(r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})', page_text):
+            try:
+                mon_num = datetime.strptime(mon[:3], "%b").month
+                yr = int(y) if len(y) == 4 else int(f"20{y}")
+                if yr >= 2021:
+                    parsed.append(datetime(yr, mon_num, int(d)))
             except:
                 pass
-        if parsed_dates:
-            last_date = max(parsed_dates).strftime('%d %B %Y')
 
-        # Selection Process
-        selection = "As per rules"
-        sel_header = soup.find(['strong', 'h3'], string=re.compile("Selection Process", re.I))
-        if sel_header:
-            nxt = sel_header.find_next(['ul', 'p'])
-            if nxt:
-                selection = ', '.join([li.get_text(strip=True) for li in nxt.find_all('li')]) if nxt.name == "ul" else nxt.get_text(strip=True)
+        # 2) D/M/Y or D-M-Y or D.M.Y
+        for d, mth, y in re.findall(r'(\d{1,2})[./\-]\s*(\d{1,2})[./\-]\s*(\d{2,4})', page_text):
+            try:
+                yr = int(y) if len(y) == 4 else int(f"20{y}")
+                if yr >= 2021:
+                    parsed.append(datetime(yr, int(mth), int(d)))
+            except:
+                pass
+
+        # Prefer lines mentioning Last/Closing date
+        lines = page_text.split("\n")
+        key = re.compile(r'(Last\s*Date|Closing\s*Date|Apply\s*Before)', re.I)
+        for i, line in enumerate(lines):
+            if key.search(line):
+                window = " ".join(lines[i:i+3])
+                for d, mon, y in re.findall(r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})', window):
+                    try:
+                        mon_num = datetime.strptime(mon[:3], "%b").month
+                        yr = int(y) if len(y) == 4 else int(f"20{y}")
+                        if yr >= 2021:
+                            parsed.append(datetime(yr, mon_num, int(d)))
+                    except:
+                        pass
+                for d, mth, y in re.findall(r'(\d{1,2})[./\-]\s*(\d{1,2})[./\-]\s*(\d{2,4})', window):
+                    try:
+                        yr = int(y) if len(y) == 4 else int(f"20{y}")
+                        if yr >= 2021:
+                            parsed.append(datetime(yr, int(mth), int(d)))
+                    except:
+                        pass
+
+        if parsed:
+            last_date = max(parsed).strftime('%d %B %Y')
 
         return {
-            "Job Post Title": title_text,
-            "Post Names": post_names,
+            "Job Post Title": title,
+            "Post Names": post_name,
             "Age Limit": age_limit,
             "Salary": salary,
             "Selection Process": selection,
             "Last Date": last_date,
             "Favicon URL": favicon_url
         }
+
     except Exception as e:
         st.error(f"Scraping error: {e}")
         return None
 
-# --- Text Wrap Helper ---
-def wrap_text_px(text, font, max_width):
-    words = (text or "").split()
-    lines, cur = [], ""
-    for w in words:
-        trial = (cur + " " + w).strip()
-        if font.getlength(trial) <= max_width or not cur:
-            cur = trial
-        else:
-            lines.append(cur)
-            cur = w
-    if cur: lines.append(cur)
-    return lines
-
-def text_height(lines, font, spacing):
-    return sum((font.getbbox(line or " ")[3] - font.getbbox(line or " ")[1]) + spacing for line in lines)
-
-# --- Renderer ---
+# ---------- Poster renderer with no-overlap engine ----------
 def create_job_post_image(details):
-    if not details: return None
+    if not details:
+        return None
 
-    # Colors
+    # Professional palettes
     palettes = [
-        {"bg": (10, 25, 47), "text": (229, 231, 235), "accent": (5, 150, 105)},
-        {"bg": (249, 250, 251), "text": (17, 24, 39), "accent": (37, 99, 235)},
-        {"bg": (33, 37, 41), "text": (248, 249, 250), "accent": (255, 193, 7)},
+        {"bg": (10, 25, 47), "text": (229, 231, 235), "accent": (5, 150, 105)},   # Navy + Emerald
+        {"bg": (249, 250, 251), "text": (17, 24, 39), "accent": (37, 99, 235)},   # Light + Blue
+        {"bg": (33, 37, 41), "text": (248, 249, 250), "accent": (255, 193, 7)},   # Charcoal + Amber
+        {"bg": (255, 255, 255), "text": (28, 28, 30), "accent": (124, 58, 237)},  # White + Purple
     ]
-    BG_COLOR, TEXT_COLOR, ACCENT_COLOR = random.choice(palettes).values()
+    pal = random.choice(palettes)
+    BG, TXT, ACC = pal["bg"], pal["text"], pal["accent"]
 
-    # Canvas
-    width, height = 1080, 1920
-    margin, safe_width = 120, width - 240
-    reserved_bottom = 90 + 30 + 180 + 30  # footer + padding + datebox + padding
+    # Canvas and layout constants
+    W, H = 1080, 1920
+    margin = 120
+    safe_w = W - 2 * margin
+    header_h = 168
+    date_box_h = 178
+    footer_h = 90
+    reserved_bottom = 30 + date_box_h + 24 + footer_h  # padding + box + padding + footer
 
-    # Fonts
-    def load_font(name, size):
-        try: return ImageFont.truetype(name, size)
-        except: return ImageFont.load_default()
+    # Fonts initial
+    title_px = 64
+    label_px = 44
+    body_px = 46
+    header_px = 50
+    footer_px = 40
 
-    title_size, label_size, body_size, header_size = 64, 44, 46, 50
-    font_title = load_font("Poppins-Bold.ttf", title_size)
-    font_label = load_font("Poppins-Bold.ttf", label_size)
-    font_body = load_font("Poppins-Regular.ttf", body_size)
-    font_header = load_font("Poppins-Bold.ttf", header_size)
-    font_footer = load_font("Poppins-Regular.ttf", 40)
+    ft_title = load_font("Poppins-Bold.ttf", title_px)
+    ft_label = load_font("Poppins-Bold.ttf", label_px)
+    ft_body = load_font("Poppins-Regular.ttf", body_px)
+    ft_header = load_font("Poppins-Bold.ttf", header_px)
+    ft_footer = load_font("Poppins-Regular.ttf", footer_px)
 
-    # Header & favicon
-    img = Image.new("RGB", (width, height), BG_COLOR)
-    d = ImageDraw.Draw(img)
-    header_h = 170
-    d.rectangle([0, 0, width, header_h], fill=ACCENT_COLOR)
-    d.text((width//2, header_h//2), "Latest Job Update", font=font_header, fill=BG_COLOR, anchor="mm")
+    # Spacing
+    gap_small = 8
+    gap_body = 10
+    gap_block = 22
 
-    if details["Favicon URL"]:
+    # Content
+    title = details.get("Job Post Title", "Job Update")
+    fields = [
+        ("Post Names", "💼", details.get("Post Names", "")),
+        ("Age Limit", "👤", details.get("Age Limit", "")),
+        ("Salary", "💰", details.get("Salary", "")),
+        ("Selection Process", "📝", details.get("Selection Process", "")),
+    ]
+    last_date_val = details.get("Last Date", "")
+
+    # CTA
+    keys = ["JOB", "LINK", "APPLY", "DETAILS", "INFO", "POST"]
+    ctas = [
+        "Comment '{k}' to get the link",
+        "Type '{k}' below for the apply link",
+        "Want details? Comment '{k}'",
+        "Get the post link: type '{k}'",
+    ]
+    footer_text = random.choice(ctas).format(k=random.choice(keys))
+
+    # Function to measure total height
+    def total_height():
+        t_lines = wrap_text_px(title, ft_title, safe_w)
+        t_h = text_block_height(t_lines, ft_title, gap_small) + 6
+
+        d_h = 0
+        for label, emoji, value in fields:
+            if not value:
+                continue
+            lbl = f"{emoji} {label}:"
+            b = ft_label.getbbox(lbl)
+            d_h += (b[3] - b[1]) + gap_small
+            v_lines = wrap_text_px(str(value), ft_body, safe_w)
+            d_h += text_block_height(v_lines, ft_body, gap_body)
+            d_h += gap_block
+
+        return header_h + 18 + t_h + 16 + d_h + reserved_bottom
+
+    # Auto-shrink fonts if content too tall
+    for _ in range(12):
+        if total_height() <= H - 4:
+            break
+        # reduce header then fonts
+        if header_h > 136:
+            header_h = int(header_h * 0.95)
+        title_px = max(48, int(title_px * 0.94))
+        label_px = max(34, int(label_px * 0.94))
+        body_px = max(34, int(body_px * 0.94))
+        header_px = max(42, int(header_px * 0.94))
+        footer_px = max(34, int(footer_px * 0.94))
+        ft_title = load_font("Poppins-Bold.ttf", title_px)
+        ft_label = load_font("Poppins-Bold.ttf", label_px)
+        ft_body = load_font("Poppins-Regular.ttf", body_px)
+        ft_header = load_font("Poppins-Bold.ttf", header_px)
+        ft_footer = load_font("Poppins-Regular.ttf", footer_px)
+
+    # Draw
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # Header
+    draw.rectangle([0, 0, W, header_h], fill=ACC)
+    draw.text((W//2, header_h//2), "Latest Job Update", font=ft_header, fill=BG, anchor="mm")
+
+    # Favicon sized to header text height
+    fav_url = details.get("Favicon URL")
+    if fav_url:
         try:
-            r = requests.get(details["Favicon URL"], timeout=5, stream=True)
-            r.raise_for_status()
-            fav = Image.open(r.raw).convert("RGBA")
-            target_h = font_header.getbbox("Ag")[3] + 8
+            rr = requests.get(fav_url, timeout=5, stream=True)
+            rr.raise_for_status()
+            fav = Image.open(rr.raw).convert("RGBA")
+            hb = ft_header.getbbox("Ag")
+            target_h = max(40, min(header_h - 36, hb[3] - hb[1] + 8))
             scale = target_h / fav.height
             fav = fav.resize((int(fav.width * scale), target_h), Image.LANCZOS)
             fav_y = (header_h - fav.height) // 2
             img.paste(fav, (40, fav_y), fav)
-        except: pass
+        except:
+            pass
 
-    # Draw content dynamically
-    y = header_h + 20
-    title_lines = wrap_text_px(details["Job Post Title"], font_title, safe_width)
-    for line in title_lines:
-        d.text((width//2, y), line, font=font_title, fill=TEXT_COLOR, anchor="ma")
-        y += font_title.getbbox(line)[3] - font_title.getbbox(line)[1] + 8
-    y += 18
+    y = header_h + 18
 
-    emoji_map = {"Post Names": "💼", "Age Limit": "👤", "Salary": "💰", "Selection Process": "📝"}
-    for k in ["Post Names", "Age Limit", "Salary", "Selection Process"]:
-        val = details[k]
-        label_line = f"{emoji_map[k]} {k}:"
-        d.text((margin, y), label_line, font=font_label, fill=ACCENT_COLOR)
-        y += font_label.getbbox(label_line)[3] - font_label.getbbox(label_line)[1] + 5
-        for line in wrap_text_px(val, font_body, safe_width):
-            d.text((margin, y), line, font=font_body, fill=TEXT_COLOR)
-            y += font_body.getbbox(line)[3] - font_body.getbbox(line)[1] + 5
-        y += 20
+    # Title
+    t_lines = wrap_text_px(title, ft_title, safe_w)
+    for line in t_lines:
+        draw.text((W//2, y), line, font=ft_title, fill=TXT, anchor="ma")
+        bb = ft_title.getbbox(line)
+        y += (bb[3] - bb[1]) + gap_small
+    y += 12
 
-    # Last Date box (fixed above footer)
-    box_y = height - reserved_bottom + 30
-    d.rounded_rectangle([margin-20, box_y, width-margin+20, box_y+180], radius=20, fill=ACCENT_COLOR)
-    d.text((width//2, box_y+55), "Last Date to Apply", font=font_label, fill=BG_COLOR, anchor="mm")
-    d.text((width//2, box_y+118), details["Last Date"], font=font_title, fill=BG_COLOR, anchor="mm")
+    # Details
+    for label, emoji, value in fields:
+        if not value:
+            continue
+        lbl = f"{emoji} {label}:"
+        draw.text((margin, y), lbl, font=ft_label, fill=ACC)
+        lb = ft_label.getbbox(lbl)
+        y += (lb[3] - lb[1]) + gap_small
 
-    # Footer CTA
-    keywords = ["JOB", "APPLY", "LINK", "DETAILS", "INFO"]
-    ctas = ["Comment '{k}' for the link", "Type '{k}' below to get the link", "Want details? Comment '{k}'"]
-    footer_text = random.choice(ctas).format(k=random.choice(keywords))
-    d.text((width//2, height-45), footer_text, font=font_footer, fill=ACCENT_COLOR, anchor="mm")
+        v_lines = wrap_text_px(str(value), ft_body, safe_w)
+        for ln in v_lines:
+            draw.text((margin, y), ln, font=ft_body, fill=TXT)
+            vb = ft_body.getbbox(ln)
+            y += (vb[3] - vb[1]) + gap_body
+        y += gap_block
+
+    # Last date box (fixed above footer)
+    box_y = H - reserved_bottom + 30
+    draw.rounded_rectangle([margin-18, box_y, W-margin+18, box_y + date_box_h], radius=20, fill=ACC)
+    draw.text((W//2, box_y + 56), "Last Date to Apply", font=ft_label, fill=BG, anchor="mm")
+    draw.text((W//2, box_y + 118), last_date_val or "—", font=ft_title, fill=BG, anchor="mm")
+
+    # Footer CTA (fixed)
+    draw.text((W//2, H - 44), footer_text, font=ft_footer, fill=ACC, anchor="mm")
+
     return img
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="AI Job Post Generator", layout="centered")
+# ---------- Streamlit UI ----------
+st.set_page_config(page_title="AI Job Post Image Generator", page_icon="🧰", layout="centered")  # page_icon supports emoji; also supports image objects[2][9]
 st.title("🚀 AI Job Post Image Generator")
-url = st.text_input("Enter Job Post URL:", "")
+
+st.markdown("Paste a job post URL. The app extracts Title, Post Name, Max Age Limit, Highest Salary, Selection Process, and the latest Last Date, then builds a poster in multiple sizes with branding and emojis.")
+
+url = st.text_input("Job post URL")
 sizes = {
-    "9:16 Story (1080x1920)": (1080, 1920),
-    "Instagram (1080x1080)": (1080, 1080),
-    "Facebook (1200x630)": (1200, 630)
+    "9:16 Story (1080x1920)": (1080, 1920),   # Instagram/Facebook Story[11][14][8]
+    "Instagram Square (1080x1080)": (1080, 1080),  # Instagram feed square[11][14][8]
+    "Facebook Link (1200x630)": (1200, 630),  # Facebook link image[11][14][8]
 }
-if st.button("Generate Image"):
-    if url:
-        with st.spinner("Fetching & generating..."):
-            details = get_job_details(url)
-            if details:
-                img = create_job_post_image(details)
-                st.image(img, use_column_width=True)
-                for name, size in sizes.items():
-                    buf = BytesIO()
-                    img.resize(size, Image.LANCZOS).save(buf, format="PNG")
-                    st.download_button(f"Download {name}", buf.getvalue(), file_name=f"job_post_{size[0]}x{size[1]}.png", mime="image/png")
+
+if st.button("Generate"):
+    if not url:
+        st.warning("Please paste a job post URL.")
     else:
-        st.warning("Please enter a URL.")
+        with st.spinner("Fetching and generating..."):
+            data = get_job_details(url)
+            if data:
+                poster = create_job_post_image(data)
+                if poster:
+                    st.image(poster, caption="Preview (9:16)", use_column_width=True)
+                    st.subheader("Download")
+                    for name, wh in sizes.items():
+                        buf = BytesIO()
+                        poster.resize(wh, Image.LANCZOS).save(buf, format="PNG")
+                        st.download_button(
+                            label=f"Download {name}",
+                            data=buf.getvalue(),
+                            file_name=f"job_post_{wh[0]}x{wh[1]}.png",
+                            mime="image/png"
+                        )
