@@ -10,7 +10,7 @@ import random
 
 def get_job_details(url):
     """
-    Fetches and parses job details from a URL with the most advanced intelligent matching.
+    Fetches and parses job details from a URL with corrected and reliable intelligent matching.
     """
     try:
         headers = {
@@ -33,16 +33,18 @@ def get_job_details(url):
                 post_names_text = cells[1].get_text(strip=True)
                 break
 
-        # 3. Age Limit (Focus on Max Age)
+        # 3. CORRECTED: Age Limit (Focus on Max Age)
         age_limit_str = "Not Found"
-        age_matches = re.search(r'(\d{2})\s*(?:to|-)\s*(\d{2})\s*years', page_text, re.IGNORECASE)
-        if age_matches:
-            age_limit_str = f"Up to {age_matches.group(2)} Years"
+        # Strongest pattern first: "18 to 28 years" or "18-28 years"
+        age_range_match = re.search(r'(\d{1,2})\s*(?:to|-)\s*(\d{1,2})\s*years', page_text, re.IGNORECASE)
+        if age_range_match:
+            age_limit_str = f"Up to {age_range_match.group(2)} Years"
         else:
-            max_age_match = re.search(r'max(?:imum)?\s*age\s*limit\s*[:\s]*(\d{2})', page_text, re.IGNORECASE)
+            # Fallback pattern: "Max Age Limit: 28" or "Maximum 28 years"
+            max_age_match = re.search(r'max(?:imum)?\s*age\s*(?:limit)?\s*[:\s]*(\d{1,2})', page_text, re.IGNORECASE)
             if max_age_match:
                 age_limit_str = f"Up to {max_age_match.group(1)} Years"
-        
+
         # 4. Salary
         salary_str = "Not Found"
         salaries = re.findall(r'₹?\s*([\d,]{4,})', page_text)
@@ -50,21 +52,27 @@ def get_job_details(url):
         if numeric_salaries:
             salary_str = f"Up to ₹{max(numeric_salaries):,}/-"
 
-        # 5. Last Date
+        # 5. CORRECTED: Last Date
         last_date_str = "Not Found"
+        # Matches DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY
         date_matches = re.findall(r'(\d{2})[./-](\d{2})[./-](\d{4})', page_text)
-        parsed_dates = [datetime(int(y), int(m), int(d)) for d, m, y in date_matches if int(y) > 2020]
+        parsed_dates = []
+        for d, m, y in date_matches:
+            try:
+                # Ensure year is realistic before parsing
+                if int(y) > 2020:
+                    parsed_dates.append(datetime(int(y), int(m), int(d)))
+            except ValueError:
+                continue # Ignore invalid dates
         if parsed_dates:
             last_date_str = max(parsed_dates).strftime('%d %B %Y')
 
-        # --- NEW: Selection Process Extraction ---
+        # 6. Selection Process
         selection_process_text = "As per rules"
-        selection_header = soup.find(['strong', 'h3', 'h4'], string=re.compile("Selection Process", re.I))
+        selection_header = soup.find(['strong', 'h3'], string=re.compile("Selection Process", re.I))
         if selection_header:
-            # Find the next list (ul) or paragraph (p)
             next_element = selection_header.find_next(['ul', 'p'])
             if next_element:
-                # Extract list items or paragraph text
                 if next_element.name == 'ul':
                     items = [li.get_text(strip=True) for li in next_element.find_all('li')]
                     selection_process_text = ', '.join(items)
@@ -76,7 +84,7 @@ def get_job_details(url):
             "Post Names": post_names_text,
             "Age Limit": age_limit_str,
             "Salary": salary_str,
-            "Selection Process": selection_process_text, # Added new detail
+            "Selection Process": selection_process_text,
             "Last Date": last_date_str
         }
         return details
@@ -87,28 +95,24 @@ def get_job_details(url):
 
 def create_job_post_image(details):
     """
-    Creates a visually dynamic image with random palettes and engaging, keyword-based CTAs.
+    Creates a visually dynamic image with all features integrated.
     """
     if not details:
         return None
 
     palettes = [
+        {"bg": (34, 40, 49), "text": (238, 238, 238), "accent": (0, 173, 181)},
         {"bg": (245, 245, 245), "text": (40, 40, 40), "accent": (26, 140, 140)},
         {"bg": (230, 240, 255), "text": (50, 60, 80), "accent": (0, 102, 204)},
         {"bg": (255, 248, 240), "text": (60, 45, 45), "accent": (200, 80, 70)},
-        {"bg": (34, 40, 49), "text": (238, 238, 238), "accent": (0, 173, 181)},
     ]
     palette = random.choice(palettes)
     BG_COLOR, TEXT_COLOR, ACCENT_COLOR = palette["bg"], palette["text"], palette["accent"]
 
-    # --- NEW: Dynamic Keyword Call-to-Action ---
     keywords = ["JOB", "APPLY", "LINK", "DETAILS", "POST", "INFO", "YES", "GUIDE"]
     cta_templates = [
-        "Comment '{keyword}' to get the link!",
-        "Want the link? Type '{keyword}' below!",
-        "For application link, comment '{keyword}'.",
-        "Type '{keyword}' in comments for details!",
-        "Get the post link! Comment '{keyword}' now."
+        "Comment '{keyword}' to get the link!", "Want the link? Type '{keyword}' below!",
+        "For application link, comment '{keyword}'.", "Type '{keyword}' in comments for details!"
     ]
     
     width, height = 1080, 1920
@@ -119,14 +123,13 @@ def create_job_post_image(details):
         font_bold = ImageFont.truetype("Poppins-Bold.ttf", size=75)
         font_regular = ImageFont.truetype("Poppins-Regular.ttf", size=48)
         font_small = ImageFont.truetype("Poppins-Regular.ttf", size=42)
+        header_font = ImageFont.truetype("Poppins-Bold.ttf", size=55)
     except IOError:
-        st.error("Font files are missing!")
+        st.error("Font files are missing! Please ensure Poppins fonts are in the repository.")
         return None
 
-    header_text = "Latest Job Update"
-    header_font = ImageFont.truetype("Poppins-Bold.ttf", size=55)
     draw.rectangle([0, 0, width, 180], fill=ACCENT_COLOR)
-    draw.text((width/2, 90), header_text, font=header_font, fill=BG_COLOR, anchor="mm")
+    draw.text((width/2, 90), "Latest Job Update", font=header_font, fill=BG_COLOR, anchor="mm")
 
     y_position = 280
     wrapped_title = textwrap.wrap(details["Job Post Title"], width=25)
@@ -145,10 +148,12 @@ def create_job_post_image(details):
             value_y += 55
         y_position = value_y + 25
 
+    # Last Date Box
     draw.rectangle([50, y_position, width - 50, y_position + 180], fill=ACCENT_COLOR)
     draw.text((width/2, y_position + 60), "Last Date to Apply", font=font_small, fill=BG_COLOR, anchor="ms")
     draw.text((width/2, y_position + 125), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
     
+    # Final CTA Footer
     final_cta = random.choice(cta_templates).format(keyword=random.choice(keywords))
     draw.text((width/2, height - 100), final_cta, font=font_small, fill=ACCENT_COLOR, anchor="ms")
 
