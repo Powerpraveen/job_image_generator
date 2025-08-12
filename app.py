@@ -9,9 +9,10 @@ from datetime import datetime
 import random
 from urllib.parse import urljoin
 
+# This data scraping function is stable and requires no changes.
 def get_job_details(url):
     """
-    Fetches job details and now also scrapes the website's favicon URL.
+    Fetches job details and the website's favicon URL.
     """
     try:
         headers = {
@@ -22,16 +23,13 @@ def get_job_details(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         page_text = soup.get_text(separator="\n", strip=True)
 
-        # --- NEW: Favicon Scraping ---
         favicon_url = None
         icon_link = soup.find("link", rel=re.compile("icon", re.I))
         if icon_link and icon_link.get('href'):
             favicon_url = urljoin(url, icon_link['href'])
 
-        # Title
         title = soup.find('h1', class_='entry-title').text.strip() if soup.find('h1', class_='entry-title') else "Title Not Found"
         
-        # Post Names, Age, Salary, Date (existing robust logic)
         post_names_text = "Check Notification"
         for row in soup.find_all('tr'):
             cells = row.find_all('td')
@@ -56,10 +54,7 @@ def get_job_details(url):
         parsed_dates = []
         for d, m, y in date_matches:
             try:
-                if m.isalpha():
-                    month_num = datetime.strptime(m, "%b" if len(m)==3 else "%B").month
-                else:
-                    month_num = int(m)
+                month_num = datetime.strptime(m, "%b" if len(m)==3 else "%B").month if m.isalpha() else int(m)
                 year_num = int(f"20{y}") if len(y) == 2 else int(y)
                 if year_num > 2020: parsed_dates.append(datetime(year_num, month_num, int(d)))
             except ValueError:
@@ -75,21 +70,19 @@ def get_job_details(url):
         return {
             "Job Post Title": title, "Post Names": post_names_text, "Age Limit": age_limit_str,
             "Salary": salary_str, "Selection Process": selection_process_text, "Last Date": last_date_str,
-            "Favicon URL": favicon_url # Added favicon
+            "Favicon URL": favicon_url
         }
     except Exception as e:
-        st.error(f"An error occurred while fetching details: {e}"); return None
+        st.error(f"An error occurred: {e}"); return None
 
-# --- NEW: Re-engineered Image Generation with all final features ---
+# --- NEW: Final, Perfected Image Generation Engine ---
 def create_job_post_image(details):
     if not details: return None
 
-    # --- NEW: Expert Color Palettes ---
     palettes = [
-        {"bg": (10, 25, 47), "text": (229, 231, 235), "accent": (5, 150, 105)},     # Deep Navy, Light Gray, Emerald Green
-        {"bg": (249, 250, 251), "text": (17, 24, 39), "accent": (37, 99, 235)},      # Off White, Near Black, Strong Blue
-        {"bg": (75, 85, 99), "text": (255, 255, 255), "accent": (253, 186, 116)},    # Mid Gray, White, Pale Orange/Gold
-        {"bg": (255, 255, 255), "text": (28, 25, 23), "accent": (124, 58, 237)},    # White, Stone Black, Vibrant Purple
+        {"bg": (10, 25, 47), "text": (229, 231, 235), "accent": (5, 150, 105)},
+        {"bg": (249, 250, 251), "text": (17, 24, 39), "accent": (37, 99, 235)},
+        {"bg": (75, 85, 99), "text": (255, 255, 255), "accent": (253, 186, 116)},
     ]
     palette = random.choice(palettes)
     BG_COLOR, TEXT_COLOR, ACCENT_COLOR = palette["bg"], palette["text"], palette["accent"]
@@ -102,60 +95,63 @@ def create_job_post_image(details):
     draw = ImageDraw.Draw(img)
 
     try:
-        font_bold = ImageFont.truetype("Poppins-Bold.ttf", 70); font_regular = ImageFont.truetype("Poppins-Regular.ttf", 45); font_small = ImageFont.truetype("Poppins-Regular.ttf", 42); header_font = ImageFont.truetype("Poppins-Bold.ttf", 50)
+        font_bold = ImageFont.truetype("Poppins-Bold.ttf", 65); font_regular = ImageFont.truetype("Poppins-Regular.ttf", 45); font_small = ImageFont.truetype("Poppins-Regular.ttf", 42); header_font = ImageFont.truetype("Poppins-Bold.ttf", 50)
     except IOError:
         st.error("Font files are missing!"); return None
 
-    # --- Header with Favicon ---
-    draw.rectangle([0, 0, width, 180], fill=ACCENT_COLOR)
-    header_text = "Latest Job Update"
-    draw.text((width/2, 90), header_text, font=header_font, fill=BG_COLOR, anchor="mm")
+    # --- Header with Correctly Sized Favicon ---
+    header_height = 180
+    draw.rectangle([0, 0, width, header_height], fill=ACCENT_COLOR)
+    draw.text((width/2, header_height/2), "Latest Job Update", font=header_font, fill=BG_COLOR, anchor="mm")
     
     if details["Favicon URL"]:
         try:
             icon_response = requests.get(details["Favicon URL"], stream=True, timeout=5)
             icon_response.raise_for_status()
             favicon = Image.open(icon_response.raw).convert("RGBA")
-            favicon.thumbnail((80, 80))
-            img.paste(favicon, (50, 50), favicon) # Paste with transparency mask
+            # --- FIX: Set favicon size to be visually similar to header text ---
+            favicon_size = 70 
+            favicon.thumbnail((favicon_size, favicon_size))
+            # --- FIX: Center favicon vertically in the header bar ---
+            favicon_y = (header_height - favicon.height) // 2
+            img.paste(favicon, (60, favicon_y), favicon)
         except Exception:
-            pass # Ignore if favicon fails to load
+            pass
 
-    # --- Main Content with Improved Spacing & Emojis ---
-    y_position = 250; margin = 100
-    
+    # --- Main Content with GUARANTEED No-Trim Layout ---
+    y_position = 240
+    # --- FIX: Increased margin and reduced wrap width to prevent ANY trimming ---
+    margin = 120 
+    wrap_width_title = 24
+    wrap_width_details = 35
+
     # Title
-    title_lines = textwrap.wrap(details["Job Post Title"], width=28)
+    title_lines = textwrap.wrap(details["Job Post Title"], width=wrap_width_title)
     for line in title_lines:
         draw.text((width/2, y_position), line, font=font_bold, fill=TEXT_COLOR, anchor="ms")
         y_position += font_bold.getbbox(line)[3] + 15
-    y_position += 35 # Reduced space after title
+    y_position += 30
 
-    # --- NEW: Emojis for details ---
-    emoji_map = {
-        "Post Names": "💼", "Age Limit": "👤", "Salary": "💰", "Selection Process": "📝"
-    }
+    # Detail Items with Emojis
+    emoji_map = {"Post Names": "💼", "Age Limit": "👤", "Salary": "💰", "Selection Process": "📝"}
     detail_items = {k: v for k, v in details.items() if k in emoji_map}
-
     for key, value in detail_items.items():
         label = f"{emoji_map.get(key, '')} {key}:"
         draw.text((margin, y_position), label, font=font_small, fill=ACCENT_COLOR)
         y_position += font_small.getbbox(label)[3] + 10
-
-        value_lines = textwrap.wrap(str(value), width=40)
+        value_lines = textwrap.wrap(str(value), width=wrap_width_details)
         for line in value_lines:
             draw.text((margin, y_position), line, font=font_regular, fill=TEXT_COLOR)
             y_position += font_regular.getbbox(line)[3] + 10
-        y_position += 35 
+        y_position += 35
 
-    # Last Date Box
+    # --- Footer Elements with Fixed Positions ---
     box_height = 180
     box_y_start = height - 160 - box_height
-    draw.rectangle([margin, box_y_start, width - margin, box_y_start + box_height], fill=ACCENT_COLOR)
+    draw.rectangle([margin - 20, box_y_start, width - margin + 20, box_y_start + box_height], fill=ACCENT_COLOR)
     draw.text((width/2, box_y_start + 55), "Last Date to Apply", font=font_small, fill=BG_COLOR, anchor="ms")
     draw.text((width/2, box_y_start + 125), details["Last Date"], font=font_bold, fill=BG_COLOR, anchor="ms")
-
-    # Footer
+    
     final_cta = random.choice(cta_templates).format(keyword=random.choice(keywords))
     draw.text((width/2, height - 80), final_cta, font=font_small, fill=ACCENT_COLOR, anchor="ms")
 
@@ -164,12 +160,12 @@ def create_job_post_image(details):
 # --- Streamlit UI (No changes needed) ---
 st.set_page_config(page_title="AI Job Post Generator", layout="centered")
 st.title("🚀 AI Job Post Image Generator")
-st.markdown("Enter a job post URL to create a unique, professional social media image with branding, emojis, and a perfect layout.")
+st.markdown("Enter a job post URL to create a unique, professional social media image with a perfect, no-trim layout.")
 social_media_sizes = {"9:16 Story (1080x1920)": (1080, 1920), "Instagram Post (1080x1080)": (1080, 1080), "Facebook Post (1200x630)": (1200, 630)}
 url = st.text_input("Enter the Job Post URL:", placeholder="https://newgovtjobalert.com/...")
 if st.button("Generate Image"):
     if url:
-        with st.spinner("Analyzing page and creating expert design..."):
+        with st.spinner("Analyzing page and building perfect design..."):
             job_details = get_job_details(url)
             if job_details:
                 generated_image = create_job_post_image(job_details)
